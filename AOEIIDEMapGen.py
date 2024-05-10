@@ -1,22 +1,59 @@
+import os
+import logging
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 from PIL import Image, ImageTk, ImageFilter
 import pandas as pd
 import numpy as np
 from sklearn.cluster import KMeans
+from AoE2ScenarioParser.objects.managers.map_manager import MapManager
+from AoE2ScenarioParser.scenarios.aoe2_de_scenario import AoE2DEScenario
 
 # Declare global variables
 img_path = ""
 processed_image = None
 quantized_array = None
+color_count_slider = None
+simplification_slider = None
 centers = None
 terrains = pd.read_csv('Terrains.csv')
 color_to_dropdown = {}
 dropdown_frames = []
+input_folder = os.path.dirname(os.path.abspath(__file__))
+scenario = AoE2DEScenario.from_file(os.path.join(input_folder, "hello world.aoe2scenario"))
 
-# Global variables for UI elements
-color_count_slider = None
-simplification_slider = None
+# Setup logging configuration
+logging.basicConfig(filename='MapGeneratorLog.log', level=logging.DEBUG, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+
+logger = logging.getLogger('MapGeneratorLog')
+
+def setup_logging():
+    # Create logger
+    logger = logging.getLogger('MapGeneratorLog')
+    logger.setLevel(logging.DEBUG)
+
+    # Create file handler which logs even debug messages
+    fh = logging.FileHandler('map_generation.log')
+    fh.setLevel(logging.DEBUG)
+
+    # Create formatter and add it to the handlers
+    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    fh.setFormatter(formatter)
+
+    # Add the handlers to the logger
+    logger.addHandler(fh)
+    return logger
+
+def create_or_update_scenario():
+    global scenario, size_var
+    map_size = int(size_var.get())  # Assuming size_var holds the desired map size
+    scenario.map.width = map_size
+    scenario.map.height = map_size
+
+    # Add other scenario modifications here
+
+    # To save the scenario to a file after modifications
+    scenario.write_to_file(os.path.join(input_folder, "modified_hello_world.aoe2scenario"))
 
 def open_image():
     global img_path, processed_image, quantized_array
@@ -31,7 +68,7 @@ def generate_bitmap():
     global processed_image, centers, quantized_array, color_count_slider, simplification_slider
     number_of_colors = color_count_slider.get()
     simplification_level = simplification_slider.get()  # Get the simplification level from the slider
-    size = map_sizes[size_var.get()]
+    size = size_var.get() 
     original_image = Image.open(img_path).convert('RGB')
 
     # Ensure the image is square first
@@ -43,7 +80,7 @@ def generate_bitmap():
         original_image = original_image.filter(ImageFilter.GaussianBlur(radius=simplification_level))
 
     # Rotate and then resize to the selected map size
-    processing_image = original_image.rotate(-45, expand=True)
+    processing_image = original_image.rotate(0, expand=True) # -45 to rotate if required
     map_image = processing_image.resize((size, size), Image.Resampling.LANCZOS)
 
     np_image = np.array(map_image).reshape(-1, 3)
@@ -75,7 +112,7 @@ def init_ui():
     color_swatches_frame.pack(side='right', fill='both', expand=True, padx=10, pady=10)
 
     color_count_slider = tk.Scale(control_frame, from_=1, to=20, orient='horizontal', label='Number of Colors', length=200)
-    color_count_slider.set(8)
+    color_count_slider.set(2)
     color_count_slider.pack()
 
     simplification_slider = tk.Scale(control_frame, from_=0, to=50, orient='horizontal', label='Simplification Level', length=200)
@@ -85,11 +122,11 @@ def init_ui():
     open_button = tk.Button(control_frame, text="Open Image", command=open_image)
     open_button.pack()
 
-    map_sizes = { "Tiny": 120, "Small": 144, "Medium": 168, "Normal": 200, "Large": 220, "Giant": 240, "Ludicrous": 480 }
-    size_var = tk.StringVar(value="Ludicrous")
-
-    for size, dimension in map_sizes.items():
-        rb = tk.Radiobutton(control_frame, text=size, variable=size_var, value=size)
+    map_sizes = { "Tiny (120)": 120, "Small (144)": 144, "Medium (168)": 168, "Normal (200)": 200, "Large (220)": 220, "Giant (240)": 240, "Ludikrous (480)": 480 }
+    size_var = tk.IntVar(value=480)  # Default to the numeric part of 'Ludicrous (480)'
+    
+    for label, size in map_sizes.items():
+        rb = tk.Radiobutton(control_frame, text=label, variable=size_var, value=size)
         rb.pack()
 
     process_button = tk.Button(control_frame, text="Generate Bitmap", state=tk.DISABLED, command=generate_bitmap)
@@ -97,37 +134,48 @@ def init_ui():
 
     canvas = tk.Canvas(control_frame, width=550, height=550)
     canvas.pack()
-    export_button = tk.Button(control_frame, text="Export RMS Map", command=export_rms)
+    export_button = tk.Button(control_frame, text="Export aoe2scenario Map", command=export_rms)
     export_button.pack()
 
     root.mainloop()
 
+# Initialize scenario
+def initialize_scenario():
+    global scenario
+    scenario = AoE2DEScenario.from_file(os.path.join(input_folder, "hello world.aoe2scenario"))
+
 def export_rms():
-    # Prepare the RMS content header
-    rms_content = "/* Random Map Script */\n"
-    rms_content += "/* Automatically generated */\n\n"
-    rms_content += "create_land {\n"
-    rms_content += "    base_terrain GRASS\n"  # Default terrain, change as needed
-    rms_content += "    land_percent 100\n"
-    rms_content += "    terrain_type GRASS\n"
-    rms_content += "    other_zone_avoidance_distance 0\n"
-    rms_content += "}\n\n"
+    global scenario, quantized_array, color_to_dropdown, terrains
 
-    # This example assumes a simple approach to demonstrate the concept
-    # In practice, you would generate the map with more specific commands for each tile based on your game's scripting capabilities
-    for y in range(quantized_array.shape[0]):
-        for x in range(quantized_array.shape[1]):
-            color = tuple(quantized_array[y, x][:3])  # Get RGB color
-            terrain_type = color_to_dropdown[color][0].get() if color in color_to_dropdown else "GRASS"
-            # You might need to convert terrain_type to an actual command or ID used in RMS scripts
-            # Here we simply note it as a comment for each coordinate for demonstration
-            rms_content += f"/* Terrain at ({x}, {y}): {terrain_type} */\n"
+    # Make sure scenario is initialized
+    if not scenario:
+        initialize_scenario()
 
-    # Save RMS file
-    with open("custom_map.rms", "w") as file:
-        file.write(rms_content)
+    # Access the map manager from the scenario
+    map_manager = scenario.map_manager
 
-    print("RMS file has been created.")
+    # Update map size dynamically based on user input
+    map_size = int(size_var.get())
+    map_manager.map_size = map_size
+
+    logger.debug("Map size set to: {}".format(map_size))
+
+    # Iterate over each pixel in the quantized array, ensuring indices are within bounds
+    for y in range(min(quantized_array.shape[0], map_manager.map_size)):
+        for x in range(min(quantized_array.shape[1], map_manager.map_size)):
+            color = tuple(quantized_array[y, x])
+            if color in color_to_dropdown:
+                terrain_type = color_to_dropdown[color].get()  # Get the terrain type from dropdown
+                terrain_id = int(terrains[terrains['Descriptive_Name'] == terrain_type]['Constant_ID'].values[0])
+                tile = map_manager.get_tile(x, y)
+                tile.terrain_id = terrain_id
+                logger.info("Setting tile at ({}, {}) to color {} with terrain ID {}".format(x, y, color, terrain_id))
+            else:
+                logger.warning("No terrain defined for color: {}".format(color))
+
+    # Save the scenario with terrain modifications
+    scenario.write_to_file(os.path.join(input_folder, "modified_hello_world.aoe2scenario"))
+    logger.info("The map has been exported successfully to {}".format(os.path.join(input_folder, "modified_hello_world.aoe2scenario")))
 
 def update_canvas():
     global canvas_image
@@ -135,6 +183,15 @@ def update_canvas():
         tk_image = ImageTk.PhotoImage(processed_image)
         canvas.create_image(20, 20, anchor=tk.NW, image=tk_image)
         canvas.image = tk_image
+
+        north_label = tk.Label(canvas, text="NORTH", font=('Arial', 8, 'bold'))
+        north_label.place(x=17, y=0)
+        east_label = tk.Label(canvas, text="EAST", font=('Arial', 8, 'bold'))
+        east_label.place(x=canvas.winfo_width() - 65, y=0)
+        south_label = tk.Label(canvas, text="SOUTH", font=('Arial', 8, 'bold'))
+        south_label.place(x=17, y=canvas.winfo_height() - 33)
+        west_label = tk.Label(canvas, text="WEST", font=('Arial', 8, 'bold'))
+        west_label.place(x=canvas.winfo_width() - 65, y=canvas.winfo_height() - 33)
     else:
         canvas.delete("all")
 
@@ -155,10 +212,10 @@ def update_color_swatches(centers):
         dropdown = ttk.Combobox(frame, textvariable=dropdown_var, values=terrains['Descriptive_Name'].tolist())
         dropdown.pack(side="right", padx=10)
 
+        color_to_dropdown[tuple(color)] = dropdown_var  # Store the StringVar, not the frame
+
         flash_button = tk.Button(frame, text="Flash", command=lambda c=color: flash_color(c))
         flash_button.pack(side="right", padx=10)
-
-        color_to_dropdown[tuple(color)] = (dropdown_var, frame)
 
 def flash_color(color):
     global quantized_array
